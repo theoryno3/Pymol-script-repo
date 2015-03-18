@@ -35,7 +35,7 @@
 
 # python lib
 import os
-import sys, platform, subprocess
+import sys, platform, subprocess, re
 import time
 import tkSimpleDialog
 import tkMessageBox
@@ -258,12 +258,13 @@ class MSMSPlugin:
 ##                                           entry_width=20)
 ##         pdb2xyzr_bin_but = Tkinter.Button(group_loc, text = 'Browse...',
 ##                                           command = self.getPdb2xyzrBin)
-        pdb2xyzrn_bin_ent = Pmw.EntryField(group_loc,
-                                           label_text='pdb2xyzrn binary:', labelpos='wn',
-                                           entry_textvariable=self.pdb2xyzrn_bin,
-                                           entry_width=20)
-        pdb2xyzrn_bin_but = Tkinter.Button(group_loc, text = 'Browse...',
-                                           command = self.getPdb2xyzrnBin)
+        if not sys.platform.startswith('win'): # use pdb2xyzr function for windows OS
+            pdb2xyzrn_bin_ent = Pmw.EntryField(group_loc,
+                                               label_text='pdb2xyzrn binary:', labelpos='wn',
+                                               entry_textvariable=self.pdb2xyzrn_bin,
+                                               entry_width=20)
+            pdb2xyzrn_bin_but = Tkinter.Button(group_loc, text = 'Browse...',
+                                               command = self.getPdb2xyzrnBin)
 
         tmp_dir_ent = Pmw.EntryField(group_loc,
                                      label_text='Temporary dir:', labelpos='wn',
@@ -278,8 +279,9 @@ class MSMSPlugin:
 
         msms_bin_ent.grid(sticky='we', row=0, column=0, padx=5, pady=1)
         msms_bin_but.grid(sticky='we', row=0, column=1, padx=5, pady=1)
-        pdb2xyzrn_bin_ent.grid(sticky='we', row=1, column=0, padx=5, pady=1)
-        pdb2xyzrn_bin_but.grid(sticky='we', row=1, column=1, padx=5, pady=1)
+        if not sys.platform.startswith('win'):
+            pdb2xyzrn_bin_ent.grid(sticky='we', row=1, column=0, padx=5, pady=1)
+            pdb2xyzrn_bin_but.grid(sticky='we', row=1, column=1, padx=5, pady=1)
         tmp_dir_ent.grid(sticky='we', row=2, column=0, padx=5, pady=1)
         tmp_dir_but.grid(sticky='we', row=2, column=1, padx=5, pady=1)
         ko_cb.grid(sticky='w', row=3, column=0, padx=1, pady=1)
@@ -524,7 +526,8 @@ http://pymol.sourceforge.net/faq.html#CITE
         if VERBOSE:
             print 'MSMS bin  =',self.msms_bin.get()
 ##             print self.pdb2xyzr_bin.get()
-            print 'pdb2xyzrn =', self.pdb2xyzrn_bin.get()
+            if not sys.platform.startswith('win'):
+                print 'pdb2xyzrn =', self.pdb2xyzrn_bin.get()
             print 'tmp dir   =', self.tmp_dir.get()
 
         pdb_fn = self.getStrucPDBFname()
@@ -538,9 +541,13 @@ http://pymol.sourceforge.net/faq.html#CITE
             print 'Ignore hydrogen atoms   =', str(self.noh.get())
             print 'Consider all surface components =', str(self.allcpn.get())
 
+        if sys.platform.startswith('win'):
+            pdb2xyzrn_bin_val = None
+        else:
+            pdb2xyzrn_bin_val = self.pdb2xyzrn_bin.get()
         msms = Msms(msms_bin=self.msms_bin.get(),
                     #pdb2xyzr_bin=self.pdb2xyzr_bin.get(),
-                    pdb2xyzrn_bin=self.pdb2xyzrn_bin.get(),
+                    pdb2xyzrn_bin=pdb2xyzrn_bin_val,
                     pr=self.probe_radius.get(),
                     den=self.density.get(),
                     hden=self.hdensity.get(),
@@ -553,8 +560,9 @@ http://pymol.sourceforge.net/faq.html#CITE
         # remove temp file (saved pymol selection)
         if self.cleanup_saved_pymol_sel and \
                 len(self.pymol_sel.get()) > 0 and os.path.isfile(pdb_fn):
-            if VERBOSE: print 'Cleaning temp file(s)', pdb_fn
-            #!os.remove(pdb_fn)  # clean up (remove pdb file of the pymol selection)
+            if VERBOSE:
+                print 'Cleaning temp file(s)', pdb_fn
+                os.remove(pdb_fn)  # clean up (remove pdb file of the pymol selection)
 
         fn_list = msms.getOutputFiles()
         self.msms_vert_fn = fn_list[0]
@@ -761,7 +769,10 @@ class Msms:
         self.msms_wd  = os.path.dirname(self.msms_bin)
 
 ##         self.pdb2xyzr_bin  = os.path.abspath(os.path.expanduser(pdb2xyzr_bin))
-        self.pdb2xyzrn_bin = os.path.abspath(os.path.expanduser(pdb2xyzrn_bin))
+        if pdb2xyzrn_bin is None:
+            self.pdb2xyzrn_bin = None
+        else:
+            self.pdb2xyzrn_bin = os.path.abspath(os.path.expanduser(pdb2xyzrn_bin))
 
         self.param_pr   = pr   # probe radius
         self.param_den  = den  # surface vertex density
@@ -828,6 +839,113 @@ class Msms:
         print 'All components = %s' % (self.all_components,)
         return
 
+    def pdb2xyzr(self, pdb_fn, output_fn, h_select=5):
+        """ MSMS pdb2xyzr only works in UNIX/LINUX.
+            This is a replacement of it (NOT fully tested!).
+        """
+        h_select = 5
+
+        fh = open(pdb_fn)
+        fd = fh.readlines()
+        fh.close()
+
+        # read the radius table
+        msms_path, n = os.path.split(self.msms_bin)
+        print 'msms_bin', self.msms_bin
+        print 'msms_path', msms_path
+        #msms_path = '\"%s\"' % (msms_path,) # in case there are special chars in the path
+        # assume atmtypenumbers file is in the same path as msms
+        #old_dir = os.getcwd()
+        #os.chdir(msms_path)
+        numfile = os.path.normpath('%s/atmtypenumbers' % (msms_path,))
+        print 'numfile', numfile
+        fh1 = open(numfile)
+        fd1 = fh1.readlines()
+        fh1.close()
+        #os.chdir(old_dir)
+        explicit_rad = {}
+        united_rad = {}
+        npats = 0    # number of patterns 
+        respat = {}  # residue patterns
+        atmpat = {}  # atom patterns
+        atmnum = {}
+
+        for line in fd1:
+
+            if line.startswith('#') or len(line.strip()) == 0: continue
+
+            elif line.startswith('radius'):
+                buf = line.strip().split()
+                n = int(buf[1])
+                explicit_rad[n] = float(buf[3])
+                if len(buf) <= 4 or buf[4]=='#':
+                    united_rad[n] = explicit_rad[n]
+                else:
+                    united_rad[n] = float(buf[4])
+
+            else:
+                buf = line.strip().split()
+                respat[npats] = buf[0]
+                if respat[npats] == '*': respat[npats] = '.*'
+                respat[npats] = '^' + respat[npats] + '$' 
+                atmpat[npats] = '^' + buf[1] + '$'
+                atmpat[npats].replace('_', ' ')
+                atmnum[npats] = int(buf[2])
+                if atmnum[npats] not in explicit_rad:
+                    # the key has no radius --- complain and fake one
+                    print 'pdb_to_xyzr: error in library file', numfile, \
+                          'entry', buf[0], buf[1], buf[2], 'has no corresponding radius value'
+                    explicit_rad[atmnum[npats]] = 0.01
+                    united_rad[atmnum[npats]] = 0.01
+
+                npats += 1
+
+        print 'Here I am in the middle!'
+        H_pat  = re.compile('[ \d][HhDd]')
+        HG_pat = re.compile('[Hh][^Gg]')
+        output_buf = []
+
+        line_num = 0
+        for line in fd:
+
+            line_num += 1
+
+            if (line.startswith('ATOM  ') or line.startswith('HETATM')) and len(line) > 54:
+
+                aname   = line[12:16]
+
+                # special handling needed for hydrogens in PDB files: they start with
+                # digits not the letter "H"
+                if re.search(H_pat, aname[:2]) is not None:  aname = 'H'
+                # However, some bogus PDP files have the H in column 13 so we allow
+                # those too, which means we will treat as Hydrogen helium and hafnium 
+                # but we protect HG ... ... mp
+                #
+                if re.search(HG_pat, aname[:2]) is not None: aname = 'H'
+
+                aname = aname.strip()
+                resname = line[17:20].strip()
+                resnum  = line[22:26].strip()
+                x,y,z   = line[30:38], line[38:46], line[46:54]
+
+                for pat in xrange(npats):
+                    if re.search(atmpat[pat],aname) and re.search(respat[pat], resname):
+                        break
+
+                if pat == npats:   # Not found
+                    print "pdb_to_xyzr: error, file",fn,"line",NR,"residue", resnum,\
+                          "atom pattern",resname, aname,"was not found in ", numfile 
+                    output_buf.append('%s %s %s 0.01\n' % (x,y,z))
+                else:
+                    output_buf.append(
+                        '%s %s %s %.2f\n' % (x,y,z,h_select==5 and united_rad[atmnum[pat]] or explicit_rad[atmnum[pat]]))
+
+        print 'output_fn',output_fn
+        fh = open(output_fn,'w')
+        fh.writelines(output_buf)
+        fh.close()
+        return
+
     def run(self, pdb_fn, ofn_root=None):
         """ Run MSMS on given pdb file. Output file names are stored.
 
@@ -841,7 +959,11 @@ class Msms:
         fname_root = os.path.splitext(os.path.split(pdb_fn)[-1])[0]
 ##         xyzr_fname  = '%s/%s.xyzr' % (self.output_dir, fname_root)
         #xyzrn_fname = '%s/%s.xyzrn' % (self.output_dir, fname_root)
-        xyzrn_fname = os.path.join(self.output_dir,"%s.xyzrn"%fname_root)
+        if sys.platform.startswith('win'):
+            fname_root = os.path.normpath(os.path.splitext(os.path.split(pdb_fn)[-1])[0])
+            xyzr_fname = os.path.normpath('%s/%s.xyzr' % (self.output_dir, fname_root))
+        else:
+            xyzrn_fname = os.path.join(self.output_dir,"%s.xyzrn"%fname_root)
 
         if ofn_root is None:  ofn_root = '%s_surface' % (fname_root,)
 
@@ -849,9 +971,9 @@ class Msms:
         os.chdir(self.msms_wd)
 ##         cmd = '%s %s > %s' % (self.pdb2xyzr_bin, pdb_fn, xyzr_fname)
 ##         os.system(cmd)
-        cmd = '%s %s > %s' % (self.pdb2xyzrn_bin, pdb_fn, xyzrn_fname)
-        #os.system(cmd)
-        print cmd
+        if not sys.platform.startswith('win'):
+            cmd = '%s %s > %s' % (self.pdb2xyzrn_bin, pdb_fn, xyzrn_fname)
+            print cmd
         if sys.platform.startswith('win') and 'PYMOL_GIT_MOD' in os.environ:
             pymol_env = os.environ.copy()
             callfunc = subprocess.Popen(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=pymol_env)
@@ -861,7 +983,10 @@ class Msms:
             retval = callfunc.returncode
             print "pdb2xyzrn's mainCommand returned",retval
         else:
-            status = subprocess.call(cmd, shell=True)
+            if sys.platform.startswith('win'):
+                self.pdb2xyzr(pdb_fn, xyzr_fname)
+            else:
+                status = subprocess.call(cmd, shell=True)
         # read in .xyzr and .xyzrn data
 ##         try:
 ##             xyzr_fh = open(xyzr_fname)
@@ -873,23 +998,38 @@ class Msms:
 ##             print '       pdb file = %s' % (pdb_fn,)
 ##             sys.exit()
 
-        try:
-            xyzrn_fh = open(xyzrn_fname)
-            self.xyzrn_fd = xyzrn_fh.readlines()
-            xyzrn_fh.close()
-        except IOError:
-            print 'ERROR: pdb2xyzrn failed to convert pdb file to xyzrn file!'
-            print '       pdb2xyzrn = %s' % (self.pdb2xyzrn_bin,)
-            print '       pdb file  = %s' % (pdb_fn,)
-            sys.exit()
+        if sys.platform.startswith('win'):
+            try:
+                xyzr_fh = open(xyzr_fname)
+                self.xyzr_fd = xyzr_fh.readlines()
+                xyzr_fh.close()
+            except IOError:
+                print 'ERROR: pdb2xyzr failed to convert pdb file to xyzr file!'
+                print '       pdb2xyzr = %s' % (self.pdb2xyzr_bin,)
+                print '       pdb file = %s' % (pdb_fn,)
+                sys.exit()
+        else:
+            try:
+                xyzrn_fh = open(xyzrn_fname)
+                self.xyzrn_fd = xyzrn_fh.readlines()
+                xyzrn_fh.close()
+            except IOError:
+                print 'ERROR: pdb2xyzrn failed to convert pdb file to xyzrn file!'
+                print '       pdb2xyzrn = %s' % (self.pdb2xyzrn_bin,)
+                print '       pdb file  = %s' % (pdb_fn,)
+                sys.exit()
 
         #output_root = '%s/%s' % (self.output_dir, ofn_root)
         output_root = os.path.join(self.output_dir, ofn_root)
 
-        # run MSMS on .xyzrn file
+        # run MSMS on .xyzrn file, or .xyzr file if windows OS
         msms_bin_str = '\"%s\"' % (self.msms_bin,) # there may be whitespace in path
+        if sys.platform.startswith('win'):
+            msms_if = xyzr_fname
+        else:
+            msms_if = xyzrn_fname
         cmd = '%s -if %s -probe_radius %f -density %f -hdensity %f -no_area -of %s' % \
-              (msms_bin_str, xyzrn_fname,
+              (msms_bin_str, msms_if, 
                self.param_pr, self.param_den, self.param_hden,
                output_root)
 
@@ -911,10 +1051,10 @@ class Msms:
 ##         self.output_xyzrn_fn = xyzrn_fname
 
         # clean up intermediate files
-##         if os.path.isfile(xyzr_fname):
-##             os.remove(xyzr_fname)
-        #!if os.path.isfile(xyzrn_fname):
-        #!    os.remove(xyzrn_fname)
+        if sys.platform.startswith('win') and os.path.isfile(xyzr_fname):
+            os.remove(xyzr_fname)
+        if not sys.platform.startswith('win') and os.path.isfile(xyzrn_fname):
+            os.remove(xyzrn_fname)
 
         self.output_vert_fn  = '%s.vert' % (output_root,)
         self.output_face_fn  = '%s.face' % (output_root,)
@@ -1190,7 +1330,7 @@ class MsmsSurface:
         self.pdb_atom = []
         self.pdb_atom_lip = []  # lipophilicity of atoms in the PDB
 
-##         self.xyzr_fd  = []
+        self.xyzr_fd  = []
         self.xyzrn_fd = []
 
         self.surf_vert_fn = None # .vert file name
